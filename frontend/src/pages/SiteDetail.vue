@@ -38,6 +38,7 @@ const { scoreOf } = useRanking({
   sites: () => siteStore.list,
   factorOf: (id: number) => siteStore.latestFactor(id),
   weights: () => profileStore.activeWeights,
+  scope: () => profileStore.activeScope,
   normalize: () => profileStore.activeProfile?.normalize ?? 'minmax',
   thresholds: () => profileStore.activeProfile?.thresholds ?? { gradeA: 78, gradeB: 58 },
   vetoedIds: () => uiStore.vetoedSiteIds
@@ -56,6 +57,25 @@ function openSite(id: number): void {
 const grade = computed(() => scoreRow.value?.grade ?? 'C')
 const factorHistory = computed(() => siteStore.factorsOf(siteId.value))
 const vetoList = computed(() => uiStore.vetosOf(siteId.value))
+
+/** 当前口径的完整文字说明（比较口径、归一方式、参与比较的营位数、是否触发小样本兜底） */
+const scopeDescription = computed(() => {
+  const row = scoreRow.value
+  if (!row) return '—'
+  const scopeText = row.scope === 'camp' ? `按营地分段（${row.segmentLabel}）` : '全库同尺'
+  const methodText =
+    row.fallback && row.method === 'minmax'
+      ? '极差归一（段内不足 3 个营位，已自动改走阈值分段）'
+      : NORMALIZE_LABELS[row.method]
+  return `${scopeText} · ${methodText} · 与 ${row.peerCount} 个营位同段比较`
+})
+
+/** 名次展示：按营地口径为段内名次，并标明段内总人数 */
+const rankText = computed(() => {
+  const row = scoreRow.value
+  if (!row) return '—'
+  return row.scope === 'camp' ? `段内第 ${row.rank} / ${row.peerCount} 位` : `第 ${row.rank} 位`
+})
 
 /* --------------------------- 多轮因子复核录入 --------------------------- */
 const showFactorForm = ref(false)
@@ -279,7 +299,7 @@ watch(
         <div class="stat-card__value">
           <GradeBadge :grade="grade" size="large" :vetoed="vetoList.length > 0" />
         </div>
-        <div class="stat-card__extra">名次第 {{ scoreRow?.rank ?? '—' }} 位</div>
+        <div class="stat-card__extra">名次{{ rankText }}</div>
       </div>
       <div class="stat-card">
         <div class="stat-card__label">坐标</div>
@@ -376,11 +396,7 @@ watch(
     <section class="panel">
       <div class="panel__head">
         <h2>因子打分表</h2>
-        <span class="weight-note">
-          归一方式：{{ profileStore.activeProfile ? NORMALIZE_LABELS[profileStore.activeProfile.normalize] : '—' }}
-          · 等级阈值 A ≥ {{ profileStore.activeProfile?.thresholds.gradeA ?? 78 }} / B ≥
-          {{ profileStore.activeProfile?.thresholds.gradeB ?? 58 }}
-        </span>
+        <span class="weight-note">当前口径：{{ scopeDescription }}</span>
       </div>
       <div class="factor-grid">
         <FactorScoreBar
@@ -398,7 +414,10 @@ watch(
       </div>
       <p class="panel__hint">
         当前名次所用因子来自最新一轮评估（{{ siteStore.latestFactor(siteId)?.assessedAt ?? '暂无' }}，
-        评估人 {{ siteStore.latestFactor(siteId)?.assessor ?? '—' }}）。
+        评估人 {{ siteStore.latestFactor(siteId)?.assessor ?? '—' }}）；等级阈值 A ≥
+        {{ profileStore.activeProfile?.thresholds.gradeA ?? 78 }} / B ≥
+        {{ profileStore.activeProfile?.thresholds.gradeB ?? 58 }}。营位的所属营地一变，
+        新旧两个比较段的得分与等级都会立即重算。
       </p>
     </section>
 

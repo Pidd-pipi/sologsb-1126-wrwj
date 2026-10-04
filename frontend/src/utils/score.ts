@@ -6,8 +6,8 @@ import type { Campsite } from '@/types/campsite'
 import { ASPECT_SCORE } from '@/types/campsite'
 import type { FactorAssessment, RockfallRisk } from '@/types/factor'
 import { ROCKFALL_SCORE } from '@/types/factor'
-import type { FactorKey, FactorMeta, FactorWeights, GradeThresholds, NormalizeMethod } from '@/types/score'
-import { FACTOR_META } from '@/types/score'
+import type { FactorKey, FactorMeta, FactorWeights, GradeThresholds, NormalizeMethod, ScoreScope } from '@/types/score'
+import { FACTOR_META, MIN_SEGMENT_SIZE } from '@/types/score'
 
 /** 推荐等级 */
 export type Grade = 'A' | 'B' | 'C'
@@ -117,11 +117,11 @@ export function rawValuesOf(site: Campsite, factor?: FactorAssessment | null): R
  * 批量归一化：极差归一需要同一批营位一起比较，所以先收集全部原始值再归一。
  * 返回 siteId -> 各因子归一化分值。
  */
-export function buildNormalizedMatrix(
-  raws: Array<{ siteId: number; values: RawFactorValues }>,
+export function buildNormalizedMatrix<T extends number = number>(
+  raws: Array<{ siteId: T; values: RawFactorValues }>,
   method: NormalizeMethod
-): Map<number, Record<FactorKey, number>> {
-  const out = new Map<number, Record<FactorKey, number>>()
+): Map<T, Record<FactorKey, number>> {
+  const out = new Map<T, Record<FactorKey, number>>()
   const matrix = FACTOR_META.map((meta) => {
     if (method === 'minmax') {
       const column = raws.map((r) => r.values[meta.key])
@@ -141,6 +141,86 @@ export function buildNormalizedMatrix(
     out.set(r.siteId, record)
   })
   return out
+}
+
+/** 未填写营地名的营位归入的兜底段名（同一营位比较段内）。 */
+export const UNASSIGNED_SEGMENT = '未指定营地'
+
+/** 一个比较段（全库口径下只有一段；按营地口径下每个营地一段）。 */
+export interface ScoreSegment<T = number> {
+  /** 段标识：全库口径固定为 all，按营地口径为营地名 */
+  key: string
+  /** 段展示名 */
+  label: string
+  /** 方案声明的归一化方式 */
+  method: NormalizeMethod
+  /** 实际生效的归一化方式（小样本段会兜底成阈值分段） */
+  effectiveMethod: NormalizeMethod
+  /** 是否因营位少于最小段规模而触发了阈值分段兜底 */
+  fallback: boolean
+  /** 段内参与比较的营位原始指标 */
+  entries: Array<{ siteId: T; values: RawFactorValues }>
+  /** siteId -> 归一化分值 */
+  matrix: Map<T, Record<FactorKey, number>>
+}
+
+/**
+ * 解析一个比较段实际使用的归一化方式：
+ * 极差归一要求段内至少有 MIN_SEGMENT_SIZE 个营位，否则一两个离群值就能决定全段名次，
+ * 此时改走阈值分段——档位固定、给分不依赖同批数据。
+ */
+export function resolveSegmentMethod(
+  method: NormalizeMethod,
+  size: number
+): { effectiveMethod: NormalizeMethod; fallback: boolean } {
+  if (method === 'minmax' && size < MIN_SEGMENT_SIZE) {
+    return { effectiveMethod: 'threshold', fallback: true }
+  }
+  return { effectiveMethod: method, fallback: false }
+}
+
+/** 段名：按营地口径下取营地名，空名归入兜底段。 */
+export function segmentLabelOf(campName: string | null | undefined): string {
+  const name = String(campName ?? '').trim()
+  return name || UNASSIGNED_SEGMENT
+}
+
+/**
+ * 按比较口径把营位切成比较段，并在每段内部独立归一化。
+ * - scope=all：全部营位一段（key 固定为 all）；
+ * - scope=camp：按营地名分段，各段独立跑极差归一，小样本段各自兜底为阈值分段。
+ */
+export function buildSegments<T extends number = number>(
+  raws: Array<{ siteId: T; campName?: string | null; values: RawFactorValues }>,
+  method: NormalizeMethod,
+  scope: ScoreScope
+): ScoreSegment<T>[] {
+  const groups = new Map<string, { label: string; entries: ScoreSegment<T>['entries'] }>()
+  for (const raw of raws) {
+    const key = scope === 'camp' ? segmentLabelOf(raw.campName) : 'all'
+    const label = scope === 'camp' ? key : '全部营位'
+    let group = groups.get(key)
+    if (!group) {
+      group = { label, entries: [] }
+      groups.set(key, group)
+    }
+    group.entries.push({ siteId: raw.siteId, values: raw.values })
+  }
+
+  return Array.from(groups.entries())
+    .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
+    .map(([key, group]) => {
+      const { effectiveMethod, fallback } = resolveSegmentMethod(method, group.entries.length)
+      return {
+        key,
+        label: group.label,
+        method,
+        effectiveMethod,
+        fallback,
+        entries: group.entries,
+        matrix: buildNormalizedMatrix(group.entries, effectiveMethod)
+      }
+    })
 }
 
 /** 加权求和：按有效权重占比归一，保证权重和不为 100 时得分依然可比。 */

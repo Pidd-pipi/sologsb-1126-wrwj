@@ -6,7 +6,7 @@ import { computed, ref } from 'vue'
 import { defineStore } from 'pinia'
 import { db, toPlain } from '@/utils/db'
 import type { RiskVeto } from '@/types/veto'
-import type { FactorWeights, NormalizeMethod, GradeThresholds } from '@/types/score'
+import type { FactorWeights, NormalizeMethod, GradeThresholds, ScoreScope } from '@/types/score'
 import { DEFAULT_WEIGHTS } from '@/types/score'
 import type { AccessMode, SurfaceType } from '@/types/campsite'
 import { nowIso, todayIso } from '@/utils/format'
@@ -23,6 +23,7 @@ export const useUiStore = defineStore('ui', () => {
 
   /** 评分页拖动中的临时权重（未保存前不落库） */
   const workingWeights = ref<FactorWeights>({ ...DEFAULT_WEIGHTS })
+  const workingScope = ref<ScoreScope>('all')
   const workingNormalize = ref<NormalizeMethod>('minmax')
   const workingThresholds = ref<GradeThresholds>({ gradeA: 78, gradeB: 58 })
   const workingSeason = ref<string>('四季通用')
@@ -77,11 +78,13 @@ export const useUiStore = defineStore('ui', () => {
   /** 用启用方案覆盖临时权重。 */
   function syncFromProfile(
     weights: FactorWeights,
+    scope: ScoreScope,
     normalize: NormalizeMethod,
     thresholds: GradeThresholds,
     season: string
   ): void {
     workingWeights.value = { ...DEFAULT_WEIGHTS, ...weights }
+    workingScope.value = scope
     workingNormalize.value = normalize
     workingThresholds.value = { ...thresholds }
     workingSeason.value = season
@@ -106,6 +109,7 @@ export const useUiStore = defineStore('ui', () => {
     filterAccess,
     keyword,
     workingWeights,
+    workingScope,
     workingNormalize,
     workingThresholds,
     workingSeason,

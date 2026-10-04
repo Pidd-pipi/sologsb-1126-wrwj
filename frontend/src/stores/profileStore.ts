@@ -2,7 +2,7 @@
 import { computed, ref } from 'vue'
 import { defineStore } from 'pinia'
 import { db, toPlain } from '@/utils/db'
-import type { FactorWeights, ScoreProfile } from '@/types/score'
+import type { FactorWeights, ScoreProfile, ScoreScope } from '@/types/score'
 import { DEFAULT_WEIGHTS } from '@/types/score'
 import { nowIso } from '@/utils/format'
 
@@ -20,6 +20,11 @@ export const useProfileStore = defineStore('profile', () => {
     ...(activeProfile.value?.weights ?? {})
   }))
 
+  /** 当前启用方案的比较口径；旧数据升级后没有该字段时沿用全库。 */
+  const activeScope = computed<ScoreScope>(
+    () => (activeProfile.value?.scope === 'camp' ? 'camp' : 'all')
+  )
+
   async function load(): Promise<void> {
     loading.value = true
     try {
@@ -35,6 +40,7 @@ export const useProfileStore = defineStore('profile', () => {
     const record = toPlain({
       ...input,
       weights: { ...DEFAULT_WEIGHTS, ...input.weights },
+      scope: input.scope ?? 'all',
       thresholds: { ...input.thresholds },
       createdAt: now,
       updatedAt: now
@@ -56,6 +62,7 @@ export const useProfileStore = defineStore('profile', () => {
     const payload: ScoreProfile = {
       name,
       weights: { ...DEFAULT_WEIGHTS, ...(src?.weights ?? {}) },
+      scope: (src?.scope ?? 'all') as ScoreScope,
       normalize: src?.normalize ?? 'minmax',
       thresholds: { ...(src?.thresholds ?? { gradeA: 78, gradeB: 58 }) },
       season: season ?? src?.season ?? '四季通用',
@@ -98,6 +105,7 @@ export const useProfileStore = defineStore('profile', () => {
     total,
     activeProfile,
     activeWeights,
+    activeScope,
     load,
     createProfile,
     updateProfile,

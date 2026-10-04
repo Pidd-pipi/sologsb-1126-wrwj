@@ -5,6 +5,7 @@
  *   v1 建 sites / factors 两张表
  *   v2 新增 profiles 表，并为 factors 补 siteId 索引
  *   v3 新增 vetos 表，并为存量营位回填默认权重方案
+ *   v4 权重方案新增 scope（比较口径），存量方案无该字段时沿用全库 'all'
  */
 import Dexie, { type Table } from 'dexie'
 import type { Campsite } from '@/types/campsite'
@@ -15,7 +16,7 @@ import type { RiskVeto } from '@/types/veto'
 
 export const DB_NAME = 'gbcampsite-db'
 /** 当前数据结构版本号 */
-export const DB_VERSION = 3
+export const DB_VERSION = 4
 
 export class GbCampsiteDatabase extends Dexie {
   sites!: Table<Campsite, number>
@@ -74,6 +75,24 @@ export class GbCampsiteDatabase extends Dexie {
             if (typeof s.tentCapacity !== 'number') s.tentCapacity = 1
           })
       })
+
+    // v4：权重方案新增比较口径（全库同尺 / 按营地分段）；
+    // 旧数据升级后没有口径设置时沿用全库，保持升级前后名次一致。
+    this.version(DB_VERSION)
+      .stores({
+        sites: '++id, code, name, campName, surface, access, defaultProfileId, updatedAt',
+        factors: '++id, siteId, assessedAt, assessor',
+        profiles: '++id, name, season, active, scope, updatedAt',
+        vetos: '++id, siteId, type, judgedAt'
+      })
+      .upgrade(async (tx) => {
+        await tx
+          .table('profiles')
+          .toCollection()
+          .modify((p: Partial<ScoreProfile>) => {
+            if (p.scope !== 'all' && p.scope !== 'camp') p.scope = 'all'
+          })
+      })
   }
 }
 
@@ -100,6 +119,7 @@ function seedProfiles(): ScoreProfile[] {
       id: 1,
       name: '均衡型方案',
       weights: { ...DEFAULT_WEIGHTS },
+      scope: 'all',
       normalize: 'minmax',
       thresholds: { gradeA: 78, gradeB: 58 },
       season: '四季通用',
@@ -125,6 +145,7 @@ function seedProfiles(): ScoreProfile[] {
         distanceToTrail: 4
       },
       normalize: 'threshold',
+      scope: 'camp',
       thresholds: { gradeA: 82, gradeB: 62 },
       season: '夏季',
       active: false,

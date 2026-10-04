@@ -10,12 +10,11 @@ import { useSiteStore } from '@/stores/siteStore'
 import { useProfileStore } from '@/stores/profileStore'
 import { useUiStore } from '@/stores/uiStore'
 import { useRanking } from '@/hooks/useRanking'
-import { FACTOR_META } from '@/types/score'
+import { FACTOR_META, NORMALIZE_LABELS, SCOPE_LABELS } from '@/types/score'
 import { SURFACE_TYPES, ACCESS_MODES } from '@/types/campsite'
 import GradeBadge from '@/components/common/GradeBadge.vue'
 import EmptyState from '@/components/common/EmptyState.vue'
 import { formatScore } from '@/utils/format'
-import { NORMALIZE_LABELS } from '@/types/score'
 
 const router = useRouter()
 const siteStore = useSiteStore()
@@ -36,14 +35,32 @@ const inputSites = computed(() =>
   })
 )
 
-const { ranked } = useRanking({
-  sites: () => inputSites.value,
+/**
+ * 比较范围始终取全库营位：页面筛选只决定展示哪些行，
+ * 若把筛选结果喂给极差归一，尺子会随筛选变化、名次失去意义。
+ */
+const { ranked, segments } = useRanking({
+  sites: () => siteStore.list,
   factorOf: (siteId: number) => siteStore.latestFactor(siteId),
   weights: () => profileStore.activeWeights,
+  scope: () => profileStore.activeScope,
   normalize: () => profileStore.activeProfile?.normalize ?? 'minmax',
   thresholds: () => profileStore.activeProfile?.thresholds ?? { gradeA: 78, gradeB: 58 },
   vetoedIds: () => uiStore.vetoedSiteIds
 })
+
+/** 当前筛选条件下实际展示的名次行（分数与名次仍按完整比较范围算出） */
+const visibleRanked = computed(() =>
+  ranked.value.filter((row) => inputSites.value.some((s) => s.id === row.siteId))
+)
+
+const activeScopeLabel = computed(() => SCOPE_LABELS[profileStore.activeScope])
+const activeNormalizeLabel = computed(() =>
+  profileStore.activeProfile ? NORMALIZE_LABELS[profileStore.activeProfile.normalize] : '—'
+)
+
+/** 触发小样本兜底的比较段（用于表头口径说明） */
+const fallbackSegments = computed(() => segments.value.filter((s) => s.fallback))
 
 const factorMetaOf = (key: string) => FACTOR_META.find((m) => m.key === key)
 
@@ -61,20 +78,19 @@ function rowClass({ row }: { row: { vetoed: boolean } }): string {
 }
 
 const stats = computed(() => {
-  const rows = ranked.value
+  const rows = visibleRanked.value
+  // 按营地口径下表格按段排列，最高分需显式取最大值而非第一行
+  const topRow = rows.reduce((max, r) => (!max || r.total > max.total ? r : max), null as typeof rows[number] | null)
   return {
     total: rows.length,
     gradeA: rows.filter((r) => r.grade === 'A').length,
     vetoed: rows.filter((r) => r.vetoed).length,
-    top: rows[0]?.total ?? 0,
-    topName: rows[0] ? `${rows[0].site.code} ${rows[0].site.name}` : '—'
+    top: topRow?.total ?? 0,
+    topName: topRow ? `${topRow.site.code} ${topRow.site.name}` : '—'
   }
 })
 
 const activeProfileName = computed(() => profileStore.activeProfile?.name ?? '—')
-const activeNormalize = computed(() =>
-  profileStore.activeProfile ? NORMALIZE_LABELS[profileStore.activeProfile.normalize] : '—'
-)
 
 function openDetail(siteId: number | undefined): void {
   if (typeof siteId !== 'number') return
@@ -128,7 +144,8 @@ function openDetail(siteId: number | undefined): void {
       <div class="panel__head">
         <h2>筛选条件</h2>
         <span class="weight-note">
-          当前方案：{{ activeProfileName }} · 归一方式：{{ activeNormalize }}
+          当前方案：{{ activeProfileName }} · 比较口径：{{ activeScopeLabel }} ·
+          归一方式：{{ activeNormalizeLabel }}
         </span>
       </div>
       <div class="filters">
@@ -161,24 +178,61 @@ function openDetail(siteId: number | undefined): void {
       </div>
     </section>
 
+    <el-alert
+      :closable="false"
+      show-icon
+      :type="fallbackSegments.length ? 'warning' : 'info'"
+      class="scope-alert"
+    >
+      <template #title>
+        当前口径：{{ activeScopeLabel }} · {{ activeNormalizeLabel }}
+        <span v-if="profileStore.activeScope === 'camp'">
+          （共 {{ segments.length }} 个营地比较段，名次为各营地内部排名，跨营地不比总分）
+        </span>
+        <span v-else>（共 1 个比较段，全部 {{ siteStore.total }} 个营位同尺排名）</span>
+      </template>
+      <template #description>
+        <span v-if="fallbackSegments.length">
+          {{ fallbackSegments.map((s) => `「${s.label}」仅 ${s.size} 个营位`).join('、') }}
+          ，少于 3 个时极差归一会被单个离群值带偏，已自动改走阈值分段给分。
+        </span>
+        <span v-else>
+          比较段营位均不少于 3 个，极差归一稳定；营位归属调整或增删营位后，相关比较段会立即重算。
+        </span>
+      </template>
+    </el-alert>
+
     <section class="panel">
       <div class="panel__head">
         <h2>名次与得分</h2>
-        <span class="weight-note">共 {{ ranked.length }} 行</span>
+        <span class="weight-note">
+          显示 {{ visibleRanked.length }} / 共 {{ ranked.length }} 行
+        </span>
       </div>
 
       <el-table
-        v-if="ranked.length"
+        v-if="visibleRanked.length"
         data-testid="ranking-table"
-        :data="ranked"
+        :data="visibleRanked"
         :row-class-name="rowClass"
         size="default"
         border
         stripe
       >
-        <el-table-column label="名次" width="76" align="center">
+        <el-table-column label="名次" width="84" align="center">
           <template #default="{ row }">
             <span class="rank-no" :class="{ 'rank-no--top': row.rank <= 3 }">{{ row.rank }}</span>
+            <div v-if="profileStore.activeScope === 'camp'" class="cell-sub">
+              段内 {{ row.peerCount }} 个
+            </div>
+          </template>
+        </el-table-column>
+        <el-table-column v-if="profileStore.activeScope === 'camp'" label="比较段（营地）" min-width="160">
+          <template #default="{ row }">
+            {{ row.segmentLabel }}
+            <el-tag v-if="row.fallback" type="warning" size="small" effect="plain" class="ml6">
+              阈值兜底
+            </el-tag>
           </template>
         </el-table-column>
         <el-table-column label="营位" min-width="210">
@@ -267,6 +321,9 @@ function openDetail(siteId: number | undefined): void {
 </template>
 
 <style scoped>
+.scope-alert {
+  margin-bottom: 14px;
+}
 .rank-no {
   display: inline-flex;
   align-items: center;

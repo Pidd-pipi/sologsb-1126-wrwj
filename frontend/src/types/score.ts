@@ -20,6 +20,17 @@ export type FactorKey =
 /** 归一化方式 */
 export type NormalizeMethod = 'minmax' | 'threshold'
 
+/**
+ * 比较口径（极差归一的比较范围）：
+ * - all：全库同尺，所有营位放进同一批做极差归一；
+ * - camp：按营地分段，各营地内部独立归一化、独立排名，避免大小营地被拉到同一条极差尺子上。
+ * 阈值分段只依赖固定档位，口径不影响其给分，但仍按段统计参与比较的营位数。
+ */
+export type ScoreScope = 'all' | 'camp'
+
+/** 触发阈值分段兜底的最小比较段规模：少于该营位数时极差归一不稳定（一个离群值就能定名次） */
+export const MIN_SEGMENT_SIZE = 3
+
 /** 因子权重表：每项 0-100 */
 export type FactorWeights = Record<FactorKey, number>
 
@@ -36,6 +47,8 @@ export interface ScoreProfile {
   name: string
   /** 各因子权重（0-100） */
   weights: FactorWeights
+  /** 极差归一的比较口径：全库同尺 / 按营地分段 */
+  scope: ScoreScope
   /** 归一化方式：极差归一 / 阈值分段 */
   normalize: NormalizeMethod
   /** 等级阈值 A/B/C */
@@ -119,6 +132,16 @@ export const SEASONS: string[] = ['春季', '夏季', '秋季', '冬季', '四�
 export const NORMALIZE_LABELS: Record<NormalizeMethod, string> = {
   minmax: '极差归一',
   threshold: '阈值分段'
+}
+
+export const SCOPE_LABELS: Record<ScoreScope, string> = {
+  all: '全库同尺',
+  camp: '按营地分段'
+}
+
+export const SCOPE_HINTS: Record<ScoreScope, string> = {
+  all: '全部营位放进同一批做极差归一，适合各营地规模相近时统一比较。',
+  camp: '每个营地内部独立归一化、独立排名，避免小营地被大营地的极差尺子带偏。'
 }
 
 /** 权重预设：均衡型 / 雨季防风 / 亲子舒适 / 重装野营（每组合计 100）。 */

@@ -12,8 +12,8 @@ import { useSiteStore } from '@/stores/siteStore'
 import { useProfileStore } from '@/stores/profileStore'
 import { useUiStore } from '@/stores/uiStore'
 import { useRanking } from '@/hooks/useRanking'
-import { NORMALIZE_LABELS, SEASONS, weightSumGuard } from '@/types/score'
-import type { FactorWeights, NormalizeMethod, GradeThresholds } from '@/types/score'
+import { NORMALIZE_LABELS, SCOPE_LABELS, SCOPE_HINTS, SEASONS, weightSumGuard } from '@/types/score'
+import type { FactorWeights, NormalizeMethod, GradeThresholds, ScoreScope } from '@/types/score'
 import { formatScore } from '@/utils/format'
 import { weightSum } from '@/utils/score'
 
@@ -25,6 +25,7 @@ const uiStore = useUiStore()
 /** 当前启用的方案快照，用于「恢复当前方案」 */
 const activeSnapshot = ref<{
   weights: FactorWeights
+  scope: ScoreScope
   normalize: NormalizeMethod
   thresholds: GradeThresholds
   season: string
@@ -35,11 +36,12 @@ function snapshotActive(): void {
   if (!p) return
   activeSnapshot.value = {
     weights: { ...p.weights },
+    scope: p.scope ?? 'all',
     normalize: p.normalize,
     thresholds: { ...p.thresholds },
     season: p.season
   }
-  uiStore.syncFromProfile(p.weights, p.normalize, p.thresholds, p.season)
+  uiStore.syncFromProfile(p.weights, p.scope ?? 'all', p.normalize, p.thresholds, p.season)
 }
 
 onMounted(() => {
@@ -51,14 +53,18 @@ watch(
   () => snapshotActive()
 )
 
-const { ranked, best } = useRanking({
+const { ranked, best, segments } = useRanking({
   sites: () => siteStore.list,
   factorOf: (id: number) => siteStore.latestFactor(id),
   weights: () => uiStore.workingWeights,
+  scope: () => uiStore.workingScope,
   normalize: () => uiStore.workingNormalize,
   thresholds: () => uiStore.workingThresholds,
   vetoedIds: () => uiStore.vetoedSiteIds
 })
+
+/** 触发小样本阈值兜底的比较段数量 */
+const fallbackSegmentCount = computed(() => segments.value.filter((s) => s.fallback).length)
 
 const totalWeight = computed(() => weightSum(uiStore.workingWeights))
 
@@ -91,6 +97,11 @@ function setNormalize(value: unknown): void {
   onNormalizeChange()
 }
 
+function setScope(value: unknown): void {
+  uiStore.workingScope = value === 'camp' ? 'camp' : 'all'
+  uiStore.dirty = true
+}
+
 function setGradeA(value: number | number[] | undefined): void {
   const num = Array.isArray(value) ? value[0] : value
   if (typeof num !== 'number') return
@@ -115,7 +126,13 @@ function revertToActive(): void {
     ElMessage.info('当前没有启用中的方案')
     return
   }
-  uiStore.syncFromProfile(snap.weights, snap.normalize, snap.thresholds, snap.season)
+  uiStore.syncFromProfile(
+    snap.weights,
+    snap.scope,
+    snap.normalize,
+    snap.thresholds,
+    snap.season
+  )
   ElMessage.success('已恢复到当前启用方案的权重')
 }
 
@@ -143,6 +160,7 @@ async function confirmSave(): Promise<void> {
   const id = await profileStore.createProfile({
     name,
     weights: { ...uiStore.workingWeights },
+    scope: uiStore.workingScope,
     normalize: uiStore.workingNormalize,
     thresholds: { ...uiStore.workingThresholds },
     season: saveForm.value.season,
@@ -223,6 +241,7 @@ async function removeProfileRow(id: number | undefined): Promise<void> {
         <div class="stat-card__value profile-name">{{ profileStore.activeProfile?.name ?? '—' }}</div>
         <div class="stat-card__extra">
           适用季节 {{ profileStore.activeProfile?.season ?? '—' }} ·
+          {{ SCOPE_LABELS[uiStore.workingScope] }} ·
           {{ profileStore.activeProfile ? NORMALIZE_LABELS[profileStore.activeProfile.normalize] : '—' }}
         </div>
       </div>
@@ -258,8 +277,16 @@ async function removeProfileRow(id: number | undefined): Promise<void> {
         @preset="onPreset"
       />
 
-      <el-divider content-position="left">归一方式与等级阈值</el-divider>
+      <el-divider content-position="left">比较口径、归一方式与等级阈值</el-divider>
       <div class="scoring-config">
+        <div class="scoring-config__item">
+          <span class="scoring-config__label">比较口径</span>
+          <el-radio-group :model-value="uiStore.workingScope" @update:model-value="setScope">
+            <el-radio-button value="all">全库同尺</el-radio-button>
+            <el-radio-button value="camp">按营地分段</el-radio-button>
+          </el-radio-group>
+          <span class="weight-note">{{ SCOPE_HINTS[uiStore.workingScope] }}</span>
+        </div>
         <div class="scoring-config__item">
           <span class="scoring-config__label">归一化方式</span>
           <el-radio-group
@@ -270,7 +297,8 @@ async function removeProfileRow(id: number | undefined): Promise<void> {
             <el-radio-button value="threshold">阈值分段</el-radio-button>
           </el-radio-group>
           <span class="weight-note">
-            极差归一看同批营位相对位置；阈值分段按固定档位给分，结果不受同批数据影响。
+            极差归一看同批营位相对位置，比较段内少于 3 个营位时自动改走阈值分段；
+            阈值分段按固定档位给分，结果不受同批数据影响。
           </span>
         </div>
         <div class="scoring-config__item">
@@ -319,12 +347,24 @@ async function removeProfileRow(id: number | undefined): Promise<void> {
     <section class="panel">
       <div class="panel__head">
         <h2>实时名次（跟随权重刷新）</h2>
-        <span class="weight-note">共 {{ ranked.length }} 个营位</span>
+        <span class="weight-note">
+          {{ SCOPE_LABELS[uiStore.workingScope] }} · 共 {{ ranked.length }} 个营位 ·
+          {{ fallbackSegmentCount }} 个比较段触发小样本阈值兜底
+        </span>
       </div>
       <el-table :data="ranked" size="small" border stripe>
-        <el-table-column label="名次" width="72" align="center">
+        <el-table-column label="名次" width="78" align="center">
           <template #default="{ row }">
             <strong class="rank">{{ row.rank }}</strong>
+            <div v-if="uiStore.workingScope === 'camp'" class="cell-sub">/{{ row.peerCount }}</div>
+          </template>
+        </el-table-column>
+        <el-table-column v-if="uiStore.workingScope === 'camp'" label="比较段" min-width="170">
+          <template #default="{ row }">
+            {{ row.segmentLabel }}
+            <el-tag v-if="row.fallback" size="small" type="warning" effect="plain" class="ml6">
+              不足 3 个 · 阈值兜底
+            </el-tag>
           </template>
         </el-table-column>
         <el-table-column label="营位" min-width="200">
@@ -332,7 +372,9 @@ async function removeProfileRow(id: number | undefined): Promise<void> {
             <el-link type="primary" underline="never" @click="router.push(`/sites/${row.siteId}`)">
               {{ row.site.code }} · {{ row.site.name }}
             </el-link>
-            <div class="cell-sub">{{ row.site.campName }} · {{ row.site.surface }}</div>
+            <div v-if="uiStore.workingScope === 'all'" class="cell-sub">
+              {{ row.site.campName }} · {{ row.site.surface }}
+            </div>
           </template>
         </el-table-column>
         <el-table-column label="坡度" width="88" align="right">
@@ -384,7 +426,10 @@ async function removeProfileRow(id: number | undefined): Promise<void> {
           </template>
         </el-table-column>
         <el-table-column label="适用季节" width="110" prop="season" />
-        <el-table-column label="归一方式" width="120">
+        <el-table-column label="比较口径" width="110" align="center">
+          <template #default="{ row }">{{ SCOPE_LABELS[(row.scope ?? 'all') as ScoreScope] }}</template>
+        </el-table-column>
+        <el-table-column label="归一方式" width="110">
           <template #default="{ row }">{{ NORMALIZE_LABELS[row.normalize as NormalizeMethod] }}</template>
         </el-table-column>
         <el-table-column label="阈值 A / B" width="120" align="center">
@@ -429,7 +474,8 @@ async function removeProfileRow(id: number | undefined): Promise<void> {
         </el-form-item>
         <el-form-item label="将保存">
           <span class="weight-note">
-            权重合计 {{ totalWeight }} · {{ NORMALIZE_LABELS[uiStore.workingNormalize] }} · 阈值 A ≥
+            权重合计 {{ totalWeight }} · {{ SCOPE_LABELS[uiStore.workingScope] }} ·
+            {{ NORMALIZE_LABELS[uiStore.workingNormalize] }} · 阈值 A ≥
             {{ uiStore.workingThresholds.gradeA }} / B ≥ {{ uiStore.workingThresholds.gradeB }}
           </span>
         </el-form-item>

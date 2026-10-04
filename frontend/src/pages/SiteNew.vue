@@ -19,7 +19,7 @@ import { FACTOR_META, DEFAULT_WEIGHTS } from '@/types/score'
 import type { FactorKey, FactorWeights } from '@/types/score'
 import {
   buildFactorRows,
-  buildNormalizedMatrix,
+  buildSegments,
   gradeOf,
   rawValuesOf,
   weightedTotal,
@@ -198,23 +198,40 @@ const previewWeights = computed<FactorWeights>(() => ({
   ...(profileStore.activeProfile?.weights ?? {})
 }))
 const previewNormalize = computed(() => profileStore.activeProfile?.normalize ?? 'minmax')
+const previewScope = computed(() =>
+  profileStore.activeProfile?.scope === 'camp' ? 'camp' : 'all'
+)
 
 const previewRaw = computed(() => rawValuesOf(previewSite.value, previewFactor.value))
 
 /**
  * 极差归一必须同批比较：把「已在库营位 + 当前候选营位」放进同一批，
  * 否则单条样本跨度为零，候选营位会拿到虚高的满分。
+ * 按营地口径时，候选营位并入同名营地段；段内不足 3 个营位同样自动兜底为阈值分段。
  */
-const previewMatrix = computed(() => {
+const previewSegment = computed(() => {
   const entries = siteStore.list
     .filter((s): s is typeof s & { id: number } => typeof s.id === 'number')
-    .map((s) => ({ siteId: s.id, values: rawValuesOf(s, siteStore.latestFactor(s.id)) }))
-  entries.push({ siteId: 0, values: previewRaw.value })
-  return buildNormalizedMatrix(entries, previewNormalize.value)
+    .map((s) => ({
+      siteId: s.id,
+      campName: s.campName,
+      values: rawValuesOf(s, siteStore.latestFactor(s.id))
+    }))
+  entries.push({
+    siteId: 0,
+    campName: previewSite.value.campName,
+    values: previewRaw.value
+  })
+  const segments = buildSegments(entries, previewNormalize.value, previewScope.value)
+  return (
+    segments.find((seg) => seg.matrix.has(0)) ??
+    segments[0] ??
+    null
+  )
 })
 
 const previewNormalized = computed(
-  () => previewMatrix.value.get(0) ?? ({} as Record<FactorKey, number>)
+  () => previewSegment.value?.matrix.get(0) ?? ({} as Record<FactorKey, number>)
 )
 
 const previewRows = computed(() =>
@@ -552,6 +569,14 @@ async function submit(): Promise<void> {
           按当前方案「{{ profileStore.activeProfile?.name ?? '—' }}」预估，保存后进入名次表
         </span>
       </div>
+      <p v-if="previewSegment" class="panel__hint" style="margin-top: 0">
+        比较口径：{{ previewScope === 'camp' ? `按营地分段（${previewSegment.label}）` : '全库同尺' }}
+        · 与 {{ previewSegment.entries.length - 1 }} 个已登记营位同段比较（含本营位共
+        {{ previewSegment.entries.length }} 个）
+        <template v-if="previewSegment.fallback">
+          · 段内不足 3 个营位，已自动改走阈值分段，避免单个离群值决定名次
+        </template>
+      </p>
       <div class="preview-head">
         <span>预估综合得分</span>
         <strong>{{ previewTotal }}</strong>
