@@ -14,7 +14,7 @@ import { useSiteStore } from '@/stores/siteStore'
 import { useProfileStore } from '@/stores/profileStore'
 import { useUiStore } from '@/stores/uiStore'
 import { useRanking } from '@/hooks/useRanking'
-import { FACTOR_META, NORMALIZE_LABELS } from '@/types/score'
+import { FACTOR_META, NORMALIZE_LABELS, SCOPE_LABELS } from '@/types/score'
 import { ASPECT_TYPES, SURFACE_TYPES, ACCESS_MODES } from '@/types/campsite'
 import type { AspectType, AccessMode, SurfaceType } from '@/types/campsite'
 import type { Grade } from '@/utils/score'
@@ -38,12 +38,19 @@ const { scoreOf } = useRanking({
   sites: () => siteStore.list,
   factorOf: (id: number) => siteStore.latestFactor(id),
   weights: () => profileStore.activeWeights,
-  normalize: () => profileStore.activeProfile?.normalize ?? 'minmax',
+  scope: () => profileStore.activeProfile?.scope ?? 'whole',
   thresholds: () => profileStore.activeProfile?.thresholds ?? { gradeA: 78, gradeB: 58 },
   vetoedIds: () => uiStore.vetoedSiteIds
 })
 
 const scoreRow = computed(() => scoreOf(siteId.value))
+
+/** 当前评分口径（全库 / 按营地 / 阈值分段） */
+const scopeLabel = computed(() => SCOPE_LABELS[profileStore.activeProfile?.scope ?? 'whole'])
+/** 参与比较的营位数（同组大小） */
+const comparisonSize = computed(() => scoreRow.value?.comparisonSize ?? 0)
+/** 实际归一化方式（小样本回退为阈值分段时展示） */
+const methodLabel = computed(() => NORMALIZE_LABELS[scoreRow.value?.method ?? 'minmax'])
 
 /** 供 MapPanel 与地图标记回调使用（避免在模板里写带类型标注的箭头函数） */
 function gradeOfSite(id: number): Grade {
@@ -377,7 +384,7 @@ watch(
       <div class="panel__head">
         <h2>因子打分表</h2>
         <span class="weight-note">
-          归一方式：{{ profileStore.activeProfile ? NORMALIZE_LABELS[profileStore.activeProfile.normalize] : '—' }}
+          评分口径：{{ scopeLabel }}（参与比较 {{ comparisonSize }} 个营位）· 实际方法：{{ methodLabel }}
           · 等级阈值 A ≥ {{ profileStore.activeProfile?.thresholds.gradeA ?? 78 }} / B ≥
           {{ profileStore.activeProfile?.thresholds.gradeB ?? 58 }}
         </span>

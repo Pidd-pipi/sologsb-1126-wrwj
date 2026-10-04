@@ -8,10 +8,10 @@
 import { computed, effectScope, type ComputedRef } from 'vue'
 import type { Campsite } from '@/types/campsite'
 import type { FactorAssessment } from '@/types/factor'
-import type { FactorKey, FactorWeights, GradeThresholds, NormalizeMethod } from '@/types/score'
+import type { FactorKey, FactorWeights, GradeThresholds, NormalizeMethod, ScoreScope } from '@/types/score'
 import {
   buildFactorRows,
-  buildNormalizedMatrix,
+  buildNormalizeContext,
   gradeOf,
   rawValuesOf,
   weightedTotal,
@@ -26,7 +26,10 @@ export interface RankingInput {
   /** siteId -> 用于评分的因子记录（通常取最新一轮评估） */
   factorOf: (siteId: number) => FactorAssessment | null
   weights: () => FactorWeights
-  normalize: () => NormalizeMethod
+  /** @deprecated 请改用 scope；保留用于旧调用兼容 */
+  normalize?: () => NormalizeMethod
+  /** 评分口径：全库 / 按营地 / 阈值分段 */
+  scope: () => ScoreScope
   thresholds: () => GradeThresholds
   /** 命中否决项的营位 id 集合 */
   vetoedIds: () => number[]
@@ -37,6 +40,10 @@ export interface RankingRow extends SiteScore {
   rank: number
   raw: RawFactorValues
   vetoTypes: string[]
+  /** 实际采用的归一化方式（小样本回退为 threshold） */
+  method: NormalizeMethod
+  /** 参与比较的营位数（同组大小） */
+  comparisonSize: number
 }
 
 export interface RankingState {
@@ -53,25 +60,32 @@ export function useRanking(input: RankingInput): RankingState {
   const ranked = scope.run(() =>
     computed<RankingRow[]>(() => {
       const sites = input.sites() ?? []
-      const normalize = input.normalize()
       const weights = input.weights()
       const thresholds = input.thresholds()
       const vetoSet = new Set(input.vetoedIds() ?? [])
+      // 兼容旧调用：未传 scope 时由 normalize 派生
+      const scopeValue: ScoreScope = input.scope
+        ? input.scope()
+        : input.normalize?.() === 'threshold'
+          ? 'threshold'
+          : 'whole'
 
       const list = sites.filter((s): s is Campsite & { id: number } => typeof s.id === 'number')
 
       // 关键：极差归一必须**同批营位一起比较**，逐条归一的话单条样本跨度为零会全部得 100。
-      // 因此先收集全部原始指标，一次性归一化，再回填到每个营位。
+      // 因此先收集全部原始指标，按口径分组归一化，再回填到每个营位。
       const entries = list.map((site) => ({
         siteId: site.id,
+        campName: site.campName,
         values: rawValuesOf(site, input.factorOf(site.id))
       }))
-      const matrix = buildNormalizedMatrix(entries, normalize)
+      const { matrix, groupOf } = buildNormalizeContext(entries, scopeValue)
 
       const rows: RankingRow[] = list.map((site, idx) => {
         const siteId = site.id
         const raw = entries[idx].values
         const normalized = matrix.get(siteId) ?? ({} as Record<FactorKey, number>)
+        const groupInfo = groupOf.get(siteId) ?? { method: 'threshold' as NormalizeMethod, size: 1 }
         const vetoed = vetoSet.has(siteId)
         const total = weightedTotal(normalized, weights)
         return {
@@ -83,6 +97,8 @@ export function useRanking(input: RankingInput): RankingState {
           vetoTypes: [],
           rows: buildFactorRows(normalized, weights).map((row) => ({ ...row, raw: raw[row.key] })),
           raw,
+          method: groupInfo.method,
+          comparisonSize: groupInfo.size,
           rank: 0
         } satisfies RankingRow
       })

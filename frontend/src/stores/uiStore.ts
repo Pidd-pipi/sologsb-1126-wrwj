@@ -6,8 +6,8 @@ import { computed, ref } from 'vue'
 import { defineStore } from 'pinia'
 import { db, toPlain } from '@/utils/db'
 import type { RiskVeto } from '@/types/veto'
-import type { FactorWeights, NormalizeMethod, GradeThresholds } from '@/types/score'
-import { DEFAULT_WEIGHTS } from '@/types/score'
+import type { FactorWeights, NormalizeMethod, GradeThresholds, ScoreScope } from '@/types/score'
+import { DEFAULT_WEIGHTS, normalizeFromScope } from '@/types/score'
 import type { AccessMode, SurfaceType } from '@/types/campsite'
 import { nowIso, todayIso } from '@/utils/format'
 
@@ -24,6 +24,7 @@ export const useUiStore = defineStore('ui', () => {
   /** 评分页拖动中的临时权重（未保存前不落库） */
   const workingWeights = ref<FactorWeights>({ ...DEFAULT_WEIGHTS })
   const workingNormalize = ref<NormalizeMethod>('minmax')
+  const workingScope = ref<ScoreScope>('whole')
   const workingThresholds = ref<GradeThresholds>({ gradeA: 78, gradeB: 58 })
   const workingSeason = ref<string>('四季通用')
   const dirty = ref(false)
@@ -79,10 +80,12 @@ export const useUiStore = defineStore('ui', () => {
     weights: FactorWeights,
     normalize: NormalizeMethod,
     thresholds: GradeThresholds,
-    season: string
+    season: string,
+    scope?: ScoreScope
   ): void {
     workingWeights.value = { ...DEFAULT_WEIGHTS, ...weights }
-    workingNormalize.value = normalize
+    workingScope.value = scope ?? (normalize === 'threshold' ? 'threshold' : 'whole')
+    workingNormalize.value = normalizeFromScope(workingScope.value)
     workingThresholds.value = { ...thresholds }
     workingSeason.value = season
     dirty.value = false
@@ -107,6 +110,7 @@ export const useUiStore = defineStore('ui', () => {
     keyword,
     workingWeights,
     workingNormalize,
+    workingScope,
     workingThresholds,
     workingSeason,
     dirty,

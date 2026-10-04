@@ -16,10 +16,10 @@ import type { AspectType, Campsite, SurfaceType, AccessMode } from '@/types/camp
 import type { FactorAssessment, RockfallRisk, WindDir, WindForce } from '@/types/factor'
 import { ROCKFALL_RISKS, WIND_DIRS, WIND_FORCES } from '@/types/factor'
 import { FACTOR_META, DEFAULT_WEIGHTS } from '@/types/score'
-import type { FactorKey, FactorWeights } from '@/types/score'
+import type { FactorKey, FactorWeights, ScoreScope } from '@/types/score'
 import {
   buildFactorRows,
-  buildNormalizedMatrix,
+  buildNormalizeContext,
   gradeOf,
   rawValuesOf,
   weightedTotal,
@@ -197,20 +197,25 @@ const previewWeights = computed<FactorWeights>(() => ({
   ...DEFAULT_WEIGHTS,
   ...(profileStore.activeProfile?.weights ?? {})
 }))
-const previewNormalize = computed(() => profileStore.activeProfile?.normalize ?? 'minmax')
+const previewScope = computed<ScoreScope>(() => profileStore.activeProfile?.scope ?? 'whole')
 
 const previewRaw = computed(() => rawValuesOf(previewSite.value, previewFactor.value))
 
 /**
  * 极差归一必须同批比较：把「已在库营位 + 当前候选营位」放进同一批，
  * 否则单条样本跨度为零，候选营位会拿到虚高的满分。
+ * 分组口径与当前启用方案一致（全库 / 按营地 / 阈值分段）。
  */
 const previewMatrix = computed(() => {
   const entries = siteStore.list
     .filter((s): s is typeof s & { id: number } => typeof s.id === 'number')
-    .map((s) => ({ siteId: s.id, values: rawValuesOf(s, siteStore.latestFactor(s.id)) }))
-  entries.push({ siteId: 0, values: previewRaw.value })
-  return buildNormalizedMatrix(entries, previewNormalize.value)
+    .map((s) => ({
+      siteId: s.id,
+      campName: s.campName,
+      values: rawValuesOf(s, siteStore.latestFactor(s.id))
+    }))
+  entries.push({ siteId: 0, campName: previewSite.value.campName, values: previewRaw.value })
+  return buildNormalizeContext(entries, previewScope.value).matrix
 })
 
 const previewNormalized = computed(

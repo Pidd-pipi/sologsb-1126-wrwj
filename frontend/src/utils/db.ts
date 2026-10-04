@@ -5,6 +5,7 @@
  *   v1 建 sites / factors 两张表
  *   v2 新增 profiles 表，并为 factors 补 siteId 索引
  *   v3 新增 vetos 表，并为存量营位回填默认权重方案
+ *   v4 为存量权重方案回填评分口径 scope（缺省沿用全库 whole）
  */
 import Dexie, { type Table } from 'dexie'
 import type { Campsite } from '@/types/campsite'
@@ -15,7 +16,7 @@ import type { RiskVeto } from '@/types/veto'
 
 export const DB_NAME = 'gbcampsite-db'
 /** 当前数据结构版本号 */
-export const DB_VERSION = 3
+export const DB_VERSION = 4
 
 export class GbCampsiteDatabase extends Dexie {
   sites!: Table<Campsite, number>
@@ -53,7 +54,7 @@ export class GbCampsiteDatabase extends Dexie {
       })
 
     // v3：新增风险否决表；为存量营位回填默认方案 id 与新增字段缺省值
-    this.version(DB_VERSION)
+    this.version(3)
       .stores({
         sites: '++id, code, name, campName, surface, access, defaultProfileId, updatedAt',
         factors: '++id, siteId, assessedAt, assessor',
@@ -72,6 +73,25 @@ export class GbCampsiteDatabase extends Dexie {
             if (typeof s.note !== 'string') s.note = ''
             if (typeof s.flatness !== 'number') s.flatness = 70
             if (typeof s.tentCapacity !== 'number') s.tentCapacity = 1
+          })
+      })
+
+    // v4：为存量权重方案回填评分口径 scope（缺省沿用全库 whole），并同步 normalize 字段
+    this.version(DB_VERSION)
+      .stores({
+        sites: '++id, code, name, campName, surface, access, defaultProfileId, updatedAt',
+        factors: '++id, siteId, assessedAt, assessor',
+        profiles: '++id, name, season, active, updatedAt, scope',
+        vetos: '++id, siteId, type, judgedAt'
+      })
+      .upgrade(async (tx) => {
+        await tx
+          .table('profiles')
+          .toCollection()
+          .modify((p: Partial<ScoreProfile>) => {
+            if (p.scope === undefined) p.scope = 'whole'
+            // 同步 normalize 字段，保持向后兼容（scope 为唯一数据源）
+            p.normalize = p.scope === 'threshold' ? 'threshold' : 'minmax'
           })
       })
   }
@@ -101,6 +121,7 @@ function seedProfiles(): ScoreProfile[] {
       name: '均衡型方案',
       weights: { ...DEFAULT_WEIGHTS },
       normalize: 'minmax',
+      scope: 'whole',
       thresholds: { gradeA: 78, gradeB: 58 },
       season: '四季通用',
       active: true,
@@ -125,6 +146,7 @@ function seedProfiles(): ScoreProfile[] {
         distanceToTrail: 4
       },
       normalize: 'threshold',
+      scope: 'threshold',
       thresholds: { gradeA: 82, gradeB: 62 },
       season: '夏季',
       active: false,

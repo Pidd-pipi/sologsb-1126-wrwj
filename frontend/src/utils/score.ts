@@ -6,8 +6,8 @@ import type { Campsite } from '@/types/campsite'
 import { ASPECT_SCORE } from '@/types/campsite'
 import type { FactorAssessment, RockfallRisk } from '@/types/factor'
 import { ROCKFALL_SCORE } from '@/types/factor'
-import type { FactorKey, FactorMeta, FactorWeights, GradeThresholds, NormalizeMethod } from '@/types/score'
-import { FACTOR_META } from '@/types/score'
+import type { FactorKey, FactorMeta, FactorWeights, GradeThresholds, NormalizeMethod, ScoreScope } from '@/types/score'
+import { FACTOR_META, MIN_GROUP_FOR_MINMAX } from '@/types/score'
 
 /** 推荐等级 */
 export type Grade = 'A' | 'B' | 'C'
@@ -113,34 +113,125 @@ export function rawValuesOf(site: Campsite, factor?: FactorAssessment | null): R
   }
 }
 
+/** 批量归一化的输入条目：营位 id、所属营地与原始指标值。 */
+export interface NormalizeEntry {
+  siteId: number
+  campName: string
+  values: RawFactorValues
+}
+
+/** 单个营位实际采用的归一化方式与比较组大小。 */
+export interface NormalizeGroupInfo {
+  method: NormalizeMethod
+  /** 参与比较的营位数（同组大小） */
+  size: number
+}
+
+/** 批量归一化结果：归一化矩阵 + 每个营位的分组信息。 */
+export interface NormalizeContext {
+  matrix: Map<number, Record<FactorKey, number>>
+  groupOf: Map<number, NormalizeGroupInfo>
+}
+
 /**
- * 批量归一化：极差归一需要同一批营位一起比较，所以先收集全部原始值再归一。
- * 返回 siteId -> 各因子归一化分值。
+ * 按评分口径把营位分组：
+ * - whole：全部营位一组
+ * - camp：按所属营地分组
+ * - threshold：不分组（阈值分段逐营位计算，分组无意义）
+ */
+function buildGroups(
+  entries: NormalizeEntry[],
+  scope: ScoreScope
+): Array<{ key: string; items: NormalizeEntry[] }> {
+  if (scope === 'camp') {
+    const byCamp = new Map<string, NormalizeEntry[]>()
+    for (const e of entries) {
+      const list = byCamp.get(e.campName) ?? []
+      list.push(e)
+      byCamp.set(e.campName, list)
+    }
+    return Array.from(byCamp, ([key, items]) => ({ key, items }))
+  }
+  return [{ key: '__all__', items: entries }]
+}
+
+/** 比较组的实际归一化方式：阈值口径恒为 threshold；其余口径组内营位少于阈值时回退为 threshold。 */
+function effectiveMethod(scope: ScoreScope, groupSize: number): NormalizeMethod {
+  if (scope === 'threshold') return 'threshold'
+  if (groupSize < MIN_GROUP_FOR_MINMAX) return 'threshold'
+  return 'minmax'
+}
+
+/**
+ * 批量归一化：极差归一需要同一批营位一起比较，所以先收集全部原始值再按口径分组归一。
+ * 返回归一化矩阵与每个营位的分组信息（实际方法、比较组大小）。
+ */
+export function buildNormalizeContext(
+  entries: NormalizeEntry[],
+  scope: ScoreScope
+): NormalizeContext {
+  const matrix = new Map<number, Record<FactorKey, number>>()
+  const groupOf = new Map<number, NormalizeGroupInfo>()
+
+  const groups = buildGroups(entries, scope)
+
+  // 记录每个营位的分组信息
+  for (const group of groups) {
+    const method = effectiveMethod(scope, group.items.length)
+    for (const e of group.items) {
+      groupOf.set(e.siteId, { method, size: group.items.length })
+    }
+  }
+
+  // 逐因子、逐组计算归一化得分
+  const columns = FACTOR_META.map((meta) => {
+    const col = new Map<number, number>()
+    for (const group of groups) {
+      const method = effectiveMethod(scope, group.items.length)
+      if (method === 'minmax') {
+        const values = group.items.map((e) => e.values[meta.key])
+        const normalized = minmaxNormalize(values, meta.higherIsBetter)
+        group.items.forEach((e, i) => col.set(e.siteId, normalized[i]))
+      } else {
+        for (const e of group.items) {
+          if (meta.key === 'wind') {
+            col.set(e.siteId, windScore(e.values.wind))
+          } else {
+            col.set(e.siteId, thresholdNormalize(e.values[meta.key], meta))
+          }
+        }
+      }
+    }
+    return col
+  })
+
+  // 按营位组装归一化记录
+  for (const e of entries) {
+    const record = {} as Record<FactorKey, number>
+    FACTOR_META.forEach((meta, i) => {
+      record[meta.key] = clamp(Math.round(columns[i].get(e.siteId) ?? 0))
+    })
+    matrix.set(e.siteId, record)
+  }
+
+  return { matrix, groupOf }
+}
+
+/**
+ * 批量归一化（兼容旧调用）：只返回 siteId -> 各因子归一化分值。
+ * 新代码请使用 buildNormalizeContext 以同时获取分组信息。
  */
 export function buildNormalizedMatrix(
   raws: Array<{ siteId: number; values: RawFactorValues }>,
   method: NormalizeMethod
 ): Map<number, Record<FactorKey, number>> {
-  const out = new Map<number, Record<FactorKey, number>>()
-  const matrix = FACTOR_META.map((meta) => {
-    if (method === 'minmax') {
-      const column = raws.map((r) => r.values[meta.key])
-      return minmaxNormalize(column, meta.higherIsBetter)
-    }
-    return raws.map((r) => {
-      if (meta.key === 'wind') return windScore(r.values.wind)
-      return thresholdNormalize(r.values[meta.key], meta)
-    })
-  })
-
-  raws.forEach((r, idx) => {
-    const record = {} as Record<FactorKey, number>
-    FACTOR_META.forEach((meta, col) => {
-      record[meta.key] = clamp(Math.round(matrix[col][idx]))
-    })
-    out.set(r.siteId, record)
-  })
-  return out
+  const scope: ScoreScope = method === 'threshold' ? 'threshold' : 'whole'
+  const entries: NormalizeEntry[] = raws.map((r) => ({
+    siteId: r.siteId,
+    campName: '',
+    values: r.values
+  }))
+  return buildNormalizeContext(entries, scope).matrix
 }
 
 /** 加权求和：按有效权重占比归一，保证权重和不为 100 时得分依然可比。 */

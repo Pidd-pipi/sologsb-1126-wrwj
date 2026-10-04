@@ -160,7 +160,10 @@ watch(
 )
 
 watch(
-  () => props.sites.map((s) => `${s.id}:${s.lng}:${s.lat}`).join('|'),
+  () =>
+    props.sites
+      .map((s) => `${s.id}:${s.lng}:${s.lat}:${props.gradeOf?.(s.id ?? -1) ?? 'C'}`)
+      .join('|'),
   () => {
     if (amap.value && !degraded.value) renderAmapMarkers()
   }

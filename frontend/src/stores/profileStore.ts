@@ -2,8 +2,8 @@
 import { computed, ref } from 'vue'
 import { defineStore } from 'pinia'
 import { db, toPlain } from '@/utils/db'
-import type { FactorWeights, ScoreProfile } from '@/types/score'
-import { DEFAULT_WEIGHTS } from '@/types/score'
+import type { FactorWeights, ScoreProfile, ScoreScope } from '@/types/score'
+import { DEFAULT_WEIGHTS, normalizeFromScope } from '@/types/score'
 import { nowIso } from '@/utils/format'
 
 export const useProfileStore = defineStore('profile', () => {
@@ -32,10 +32,13 @@ export const useProfileStore = defineStore('profile', () => {
 
   async function createProfile(input: ScoreProfile): Promise<number> {
     const now = nowIso()
+    const scope: ScoreScope = input.scope ?? 'whole'
     const record = toPlain({
       ...input,
       weights: { ...DEFAULT_WEIGHTS, ...input.weights },
       thresholds: { ...input.thresholds },
+      scope,
+      normalize: normalizeFromScope(scope),
       createdAt: now,
       updatedAt: now
     }) as ScoreProfile
@@ -53,10 +56,12 @@ export const useProfileStore = defineStore('profile', () => {
   /** 另存为新方案（复制当前方案、改名、可选切换季节）。 */
   async function duplicateProfile(id: number, name: string, season?: string): Promise<number> {
     const src = list.value.find((p) => p.id === id)
+    const scope: ScoreScope = src?.scope ?? 'whole'
     const payload: ScoreProfile = {
       name,
       weights: { ...DEFAULT_WEIGHTS, ...(src?.weights ?? {}) },
-      normalize: src?.normalize ?? 'minmax',
+      normalize: normalizeFromScope(scope),
+      scope,
       thresholds: { ...(src?.thresholds ?? { gradeA: 78, gradeB: 58 }) },
       season: season ?? src?.season ?? '四季通用',
       active: false,

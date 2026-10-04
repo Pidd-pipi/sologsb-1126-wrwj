@@ -15,7 +15,7 @@ import { SURFACE_TYPES, ACCESS_MODES } from '@/types/campsite'
 import GradeBadge from '@/components/common/GradeBadge.vue'
 import EmptyState from '@/components/common/EmptyState.vue'
 import { formatScore } from '@/utils/format'
-import { NORMALIZE_LABELS } from '@/types/score'
+import { NORMALIZE_LABELS, SCOPE_LABELS } from '@/types/score'
 
 const router = useRouter()
 const siteStore = useSiteStore()
@@ -40,7 +40,7 @@ const { ranked } = useRanking({
   sites: () => inputSites.value,
   factorOf: (siteId: number) => siteStore.latestFactor(siteId),
   weights: () => profileStore.activeWeights,
-  normalize: () => profileStore.activeProfile?.normalize ?? 'minmax',
+  scope: () => profileStore.activeProfile?.scope ?? 'whole',
   thresholds: () => profileStore.activeProfile?.thresholds ?? { gradeA: 78, gradeB: 58 },
   vetoedIds: () => uiStore.vetoedSiteIds
 })
@@ -72,8 +72,8 @@ const stats = computed(() => {
 })
 
 const activeProfileName = computed(() => profileStore.activeProfile?.name ?? '—')
-const activeNormalize = computed(() =>
-  profileStore.activeProfile ? NORMALIZE_LABELS[profileStore.activeProfile.normalize] : '—'
+const activeScope = computed(() =>
+  profileStore.activeProfile ? SCOPE_LABELS[profileStore.activeProfile.scope ?? 'whole'] : '—'
 )
 
 function openDetail(siteId: number | undefined): void {
@@ -128,7 +128,7 @@ function openDetail(siteId: number | undefined): void {
       <div class="panel__head">
         <h2>筛选条件</h2>
         <span class="weight-note">
-          当前方案：{{ activeProfileName }} · 归一方式：{{ activeNormalize }}
+          当前方案：{{ activeProfileName }} · 评分口径：{{ activeScope }}
         </span>
       </div>
       <div class="filters">

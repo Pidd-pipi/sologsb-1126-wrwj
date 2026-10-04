@@ -39,7 +39,7 @@ docker compose down
 | --- | --- | --- |
 | Campsite 营位 | `frontend/src/types/campsite.ts` | 营位编号、名称、所属营地、经纬度、海拔、坡度、坡向、地表类型、可容帐篷数、平整度评分、进出方式、默认方案 |
 | FactorAssessment 因子评估 | `frontend/src/types/factor.ts` | 所属营位、水源距离、风向与风力等级、信号强度、日照时长、落石落枝风险、植被遮蔽度、离车距离、离步道距离、评估人、评估日期 |
-| ScoreProfile 权重方案 | `frontend/src/types/score.ts` | 方案名、各因子权重（0-100）、归一化方式（极差归一 / 阈值分段）、A/B/C 等级阈值、适用季节、是否启用 |
+| ScoreProfile 权重方案 | `frontend/src/types/score.ts` | 方案名、各因子权重（0-100）、评分口径（全库极差 / 按营地极差 / 阈值分段）、归一化方式（极差归一 / 阈值分段）、A/B/C 等级阈值、适用季节、是否启用 |
 | RiskVeto 风险否决项 | `frontend/src/types/veto.ts` | 营位 id、否决类型（河道内 / 山洪沟 / 孤树下 / 崖底落石区 / 陡坡）、说明、判定人、判定日期 |
 
 ### IndexedDB 版本与升级迁移
@@ -49,6 +49,7 @@ docker compose down
 - **v1**：建立 `sites`（营位）与 `factors`（因子评估）两张表。
 - **v2**：新增 `profiles`（权重方案）表，并为 `factors` 补 `siteId` 索引，让「按营位取因子」走索引；同时为存量因子补齐 `shade`、`distanceToCar`、`distanceToTrail` 缺省值。
 - **v3**：新增 `vetos`（风险否决）表，并为存量营位回填 `defaultProfileId`（取当前启用方案的 id）与新增字段缺省值。
+- **v4**：为存量权重方案回填 `scope`（评分口径，缺省 `whole` 沿用全库极差），并同步 `normalize` 字段；每套方案可选全库极差、按营地极差或阈值分段，比较组营位少于 3 个时极差归一自动回退为阈值分段。
 
 ## 四、页面与路由
 

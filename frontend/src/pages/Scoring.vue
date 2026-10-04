@@ -12,8 +12,8 @@ import { useSiteStore } from '@/stores/siteStore'
 import { useProfileStore } from '@/stores/profileStore'
 import { useUiStore } from '@/stores/uiStore'
 import { useRanking } from '@/hooks/useRanking'
-import { NORMALIZE_LABELS, SEASONS, weightSumGuard } from '@/types/score'
-import type { FactorWeights, NormalizeMethod, GradeThresholds } from '@/types/score'
+import { NORMALIZE_LABELS, SCOPE_HINTS, SCOPE_LABELS, SEASONS, weightSumGuard, normalizeFromScope } from '@/types/score'
+import type { FactorWeights, NormalizeMethod, GradeThresholds, ScoreScope } from '@/types/score'
 import { formatScore } from '@/utils/format'
 import { weightSum } from '@/utils/score'
 
@@ -26,6 +26,7 @@ const uiStore = useUiStore()
 const activeSnapshot = ref<{
   weights: FactorWeights
   normalize: NormalizeMethod
+  scope: ScoreScope
   thresholds: GradeThresholds
   season: string
 } | null>(null)
@@ -36,10 +37,11 @@ function snapshotActive(): void {
   activeSnapshot.value = {
     weights: { ...p.weights },
     normalize: p.normalize,
+    scope: p.scope ?? 'whole',
     thresholds: { ...p.thresholds },
     season: p.season
   }
-  uiStore.syncFromProfile(p.weights, p.normalize, p.thresholds, p.season)
+  uiStore.syncFromProfile(p.weights, p.normalize, p.thresholds, p.season, p.scope)
 }
 
 onMounted(() => {
@@ -55,7 +57,7 @@ const { ranked, best } = useRanking({
   sites: () => siteStore.list,
   factorOf: (id: number) => siteStore.latestFactor(id),
   weights: () => uiStore.workingWeights,
-  normalize: () => uiStore.workingNormalize,
+  scope: () => uiStore.workingScope,
   thresholds: () => uiStore.workingThresholds,
   vetoedIds: () => uiStore.vetoedSiteIds
 })
@@ -82,13 +84,15 @@ function onPreset(next: FactorWeights): void {
   uiStore.dirty = true
 }
 
-function onNormalizeChange(): void {
+function onScopeChange(): void {
   uiStore.dirty = true
 }
 
-function setNormalize(value: unknown): void {
-  uiStore.workingNormalize = value === 'threshold' ? 'threshold' : 'minmax'
-  onNormalizeChange()
+function setScope(value: unknown): void {
+  const scope: ScoreScope = value === 'camp' ? 'camp' : value === 'threshold' ? 'threshold' : 'whole'
+  uiStore.workingScope = scope
+  uiStore.workingNormalize = normalizeFromScope(scope)
+  onScopeChange()
 }
 
 function setGradeA(value: number | number[] | undefined): void {
@@ -115,7 +119,7 @@ function revertToActive(): void {
     ElMessage.info('当前没有启用中的方案')
     return
   }
-  uiStore.syncFromProfile(snap.weights, snap.normalize, snap.thresholds, snap.season)
+  uiStore.syncFromProfile(snap.weights, snap.normalize, snap.thresholds, snap.season, snap.scope)
   ElMessage.success('已恢复到当前启用方案的权重')
 }
 
@@ -144,6 +148,7 @@ async function confirmSave(): Promise<void> {
     name,
     weights: { ...uiStore.workingWeights },
     normalize: uiStore.workingNormalize,
+    scope: uiStore.workingScope,
     thresholds: { ...uiStore.workingThresholds },
     season: saveForm.value.season,
     active: saveForm.value.activate,
@@ -207,7 +212,7 @@ async function removeProfileRow(id: number | undefined): Promise<void> {
       <div class="page-head__title">
         <h1>权重与评分</h1>
         <p>
-          拖动下方各因子权重条，右侧名次会实时重排；调整归一方式与 A/B/C 阈值可改变整体松紧。
+          拖动下方各因子权重条，右侧名次会实时重排；选择评分口径（全库 / 按营地 / 阈值分段）与 A/B/C 阈值可改变整体松紧。
           满意后可另存为季节方案，首页与详情页会立即采用启用中的方案。
         </p>
       </div>
@@ -223,7 +228,7 @@ async function removeProfileRow(id: number | undefined): Promise<void> {
         <div class="stat-card__value profile-name">{{ profileStore.activeProfile?.name ?? '—' }}</div>
         <div class="stat-card__extra">
           适用季节 {{ profileStore.activeProfile?.season ?? '—' }} ·
-          {{ profileStore.activeProfile ? NORMALIZE_LABELS[profileStore.activeProfile.normalize] : '—' }}
+          {{ profileStore.activeProfile ? SCOPE_LABELS[profileStore.activeProfile.scope ?? 'whole'] : '—' }}
         </div>
       </div>
       <div class="stat-card">
@@ -258,19 +263,20 @@ async function removeProfileRow(id: number | undefined): Promise<void> {
         @preset="onPreset"
       />
 
-      <el-divider content-position="left">归一方式与等级阈值</el-divider>
+      <el-divider content-position="left">评分口径与等级阈值</el-divider>
       <div class="scoring-config">
         <div class="scoring-config__item">
-          <span class="scoring-config__label">归一化方式</span>
+          <span class="scoring-config__label">评分口径</span>
           <el-radio-group
-            :model-value="uiStore.workingNormalize"
-            @update:model-value="setNormalize"
+            :model-value="uiStore.workingScope"
+            @update:model-value="setScope"
           >
-            <el-radio-button value="minmax">极差归一</el-radio-button>
+            <el-radio-button value="whole">全库极差</el-radio-button>
+            <el-radio-button value="camp">按营地极差</el-radio-button>
             <el-radio-button value="threshold">阈值分段</el-radio-button>
           </el-radio-group>
           <span class="weight-note">
-            极差归一看同批营位相对位置；阈值分段按固定档位给分，结果不受同批数据影响。
+            {{ SCOPE_HINTS[uiStore.workingScope] }}
           </span>
         </div>
         <div class="scoring-config__item">
@@ -384,8 +390,8 @@ async function removeProfileRow(id: number | undefined): Promise<void> {
           </template>
         </el-table-column>
         <el-table-column label="适用季节" width="110" prop="season" />
-        <el-table-column label="归一方式" width="120">
-          <template #default="{ row }">{{ NORMALIZE_LABELS[row.normalize as NormalizeMethod] }}</template>
+        <el-table-column label="评分口径" width="120">
+          <template #default="{ row }">{{ SCOPE_LABELS[row.scope as ScoreScope] ?? '全库极差' }}</template>
         </el-table-column>
         <el-table-column label="阈值 A / B" width="120" align="center">
           <template #default="{ row }">{{ row.thresholds.gradeA }} / {{ row.thresholds.gradeB }}</template>
@@ -429,7 +435,7 @@ async function removeProfileRow(id: number | undefined): Promise<void> {
         </el-form-item>
         <el-form-item label="将保存">
           <span class="weight-note">
-            权重合计 {{ totalWeight }} · {{ NORMALIZE_LABELS[uiStore.workingNormalize] }} · 阈值 A ≥
+            权重合计 {{ totalWeight }} · {{ SCOPE_LABELS[uiStore.workingScope] }} · 阈值 A ≥
             {{ uiStore.workingThresholds.gradeA }} / B ≥ {{ uiStore.workingThresholds.gradeB }}
           </span>
         </el-form-item>
